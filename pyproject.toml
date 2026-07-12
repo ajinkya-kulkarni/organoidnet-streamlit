@@ -1,0 +1,31 @@
+[project]
+name = "organoidnet-streamlit"
+version = "0.1.0"
+description = "Interactive organoid segmentation and analysis for PDAC research"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "albumentations",
+    "cellseg-models-pytorch",
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "pillow",
+    "scikit-image",
+    "seaborn",
+    "streamlit",
+    "torch",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.2.0",
+    "ruff>=0.15.21",
+]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true

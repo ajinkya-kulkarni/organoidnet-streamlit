@@ -18,13 +18,18 @@ from cellseg_models_pytorch.postproc.functional.cellpose.cellpose import (
 from cellseg_models_pytorch.transforms.albu_transforms import MinMaxNormalization
 from patch_inference import predict_large_image
 from skimage.measure import regionprops_table
-from cellpose import models as cellpose_models
-
 
 CKPT = "models/best.pt"
 DEVICE = "cpu"
 TRANSFORM = A.Compose([MinMaxNormalization(always_apply=True)])
 INTENSITY_THRESHOLD = 50
+SIZE_ORDER = ("Tiny", "Small", "Medium", "Large", "Huge")
+CITATION_CAPTION = (
+    "*Size categories computed per image "
+    "(OrganoIDNet: https://doi.org/10.1007/s13402-024-00958-2 | "
+    "Dataset: https://www.nature.com/articles/s41597-024-03631-3)"
+)
+OUTLINE_COLORS = {"Live": (0, 255, 0), "Dead": (255, 0, 0)}
 
 
 @st.cache_resource
@@ -48,20 +53,6 @@ def predict(model, img_rgb):
     flow = out["nuc"].aux_map[0].cpu().numpy()
     instances = post_proc_cellpose(fg_prob > 0.5, flow, min_size=30)
     return instances
-
-
-@st.cache_resource
-def load_cellpose_model():
-    return cellpose_models.CellposeModel(
-        pretrained_model="models/cellpose_pretrained.379168"
-    )
-
-
-@torch.no_grad()
-def predict_cellpose(model, img_rgb):
-    gray = np.mean(img_rgb, axis=2)
-    masks, _, _ = model.eval(gray, channels=[0, 0])
-    return masks
 
 
 def classify_organoids(instances, gray_img, threshold=50):
@@ -96,30 +87,25 @@ def render_instance_mask(inst):
     return (_LABEL_CMAP(inst)[:, :, :3] * 255).astype(np.uint8)
 
 
+def _draw_instance_boxes(overlay, instances, instance_ids, color):
+    for inst_id in instance_ids:
+        ys, xs = np.where(instances == inst_id)
+        if len(ys) == 0:
+            continue
+        y1, y2 = int(ys.min()), int(ys.max())
+        x1, x2 = int(xs.min()), int(xs.max())
+        overlay[y1 : y2 + 1, x1] = color
+        overlay[y1 : y2 + 1, x2] = color
+        overlay[y1, x1 : x2 + 1] = color
+        overlay[y2, x1 : x2 + 1] = color
+
+
 def draw_classified_outlines(img, instances, live_ids, dead_ids):
     overlay = img.copy()
     if len(np.unique(instances)) <= 1:
         return overlay
-    for inst_id in live_ids:
-        ys, xs = np.where(instances == inst_id)
-        if len(ys) == 0:
-            continue
-        y1, y2 = int(ys.min()), int(ys.max())
-        x1, x2 = int(xs.min()), int(xs.max())
-        overlay[y1 : y2 + 1, x1] = [0, 255, 0]
-        overlay[y1 : y2 + 1, x2] = [0, 255, 0]
-        overlay[y1, x1 : x2 + 1] = [0, 255, 0]
-        overlay[y2, x1 : x2 + 1] = [0, 255, 0]
-    for inst_id in dead_ids:
-        ys, xs = np.where(instances == inst_id)
-        if len(ys) == 0:
-            continue
-        y1, y2 = int(ys.min()), int(ys.max())
-        x1, x2 = int(xs.min()), int(xs.max())
-        overlay[y1 : y2 + 1, x1] = [255, 0, 0]
-        overlay[y1 : y2 + 1, x2] = [255, 0, 0]
-        overlay[y1, x1 : x2 + 1] = [255, 0, 0]
-        overlay[y2, x1 : x2 + 1] = [255, 0, 0]
+    _draw_instance_boxes(overlay, instances, live_ids, OUTLINE_COLORS["Live"])
+    _draw_instance_boxes(overlay, instances, dead_ids, OUTLINE_COLORS["Dead"])
     return overlay
 
 
@@ -144,14 +130,14 @@ def compute_stats(instances, img):
 
     def size_cat(a):
         if a <= p20:
-            return "Tiny"
+            return SIZE_ORDER[0]
         if a <= p40:
-            return "Small"
+            return SIZE_ORDER[1]
         if a <= p60:
-            return "Medium"
+            return SIZE_ORDER[2]
         if a <= p80:
-            return "Large"
-        return "Huge"
+            return SIZE_ORDER[3]
+        return SIZE_ORDER[4]
 
     df["Size"] = df["area"].apply(size_cat)
     return df
@@ -250,11 +236,50 @@ def plot_morphology(df):
     return figs
 
 
+def show_summary_metrics(
+    total_label, total, n_live, n_dead, viability, mean_area, mean_ecc
+):
+    columns = st.columns(6)
+    columns[0].metric(total_label, total)
+    columns[1].metric("Live", n_live)
+    columns[2].metric("Dead", n_dead)
+    columns[3].metric("Viability", f"{viability:.1f}%")
+    columns[4].metric("Mean area", f"{mean_area:.0f} px\u00b2")
+    columns[5].metric("Mean eccentricity", f"{mean_ecc:.2f}")
+
+
+def build_size_summary(df):
+    rows = []
+    for size in SIZE_ORDER:
+        sub = df[df["Size"] == size]
+        if len(sub):
+            rows.append(
+                {
+                    "Size": size,
+                    "Total": len(sub),
+                    "Live": int((sub["Status"] == "Live").sum()),
+                    "Dead": int((sub["Status"] == "Dead").sum()),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def show_size_distribution(df, title):
+    st.subheader(title)
+    st.dataframe(build_size_summary(df), width="stretch", hide_index=True)
+    st.caption(CITATION_CAPTION)
+
+
+def show_morphology(df, title):
+    st.subheader(title)
+    for fig in plot_morphology(df).values():
+        st.pyplot(fig)
+
+
 st.set_page_config(page_title="OrganoIDNet", layout="wide")
 st.title("OrganoIDNet")
 
 cellseg_model = load_model()
-cellpose_model = load_cellpose_model()
 
 
 def load_image(f):
@@ -274,21 +299,11 @@ with st.form(key="analyze_form"):
         accept_multiple_files=True,
     )
 
-    model_choice = st.selectbox(
-        "Segmentation model",
-        ["Cellpose (original)", "CellSeg-PyTorch"],
-    )
-
     submitted = st.form_submit_button("Analyze", use_container_width=True)
 
-if model_choice == "Cellpose (original)":
 
-    def predict_fn(p):
-        return predict_cellpose(cellpose_model, p)
-else:
-
-    def predict_fn(p):
-        return predict(cellseg_model, p)
+def predict_fn(p):
+    return predict(cellseg_model, p)
 
 
 if not uploaded_files:
@@ -305,13 +320,15 @@ if submitted:
         f = uploaded_files[0]
         img = load_image(f)
         prog = st.progress(0, text="Segmenting organoids...")
+
+        def on_single_tile(d, t):
+            prog.progress(d / t, text=f"Tile {d}/{t}")
+
         try:
             instances = predict_large_image(
                 predict_fn,
                 img,
-                progress_callback=lambda d, t: prog.progress(
-                    d / t, text=f"Tile {d}/{t}"
-                ),
+                progress_callback=on_single_tile,
             )
         except Exception as e:
             prog.empty()
@@ -345,38 +362,13 @@ if submitted:
         mean_area = stats_df["area"].mean() if total > 0 else 0
         mean_ecc = stats_df["eccentricity"].mean() if total > 0 else 0
 
-        m1, m2, m3, m4, m5, m6 = st.columns(6)
-        m1.metric("Total", total)
-        m2.metric("Live", n_live)
-        m3.metric("Dead", n_dead)
-        m4.metric("Viability", f"{viability:.1f}%")
-        m5.metric("Mean area", f"{mean_area:.0f} px\u00b2")
-        m6.metric("Mean eccentricity", f"{mean_ecc:.2f}")
+        show_summary_metrics(
+            "Total", total, n_live, n_dead, viability, mean_area, mean_ecc
+        )
 
         if total > 0:
-            st.subheader("Size distribution")
-            order = ["Tiny", "Small", "Medium", "Large", "Huge"]
-            rows = []
-            for sz in order:
-                sub = stats_df[stats_df["Size"] == sz]
-                if len(sub):
-                    rows.append(
-                        {
-                            "Size": sz,
-                            "Total": len(sub),
-                            "Live": int((sub["Status"] == "Live").sum()),
-                            "Dead": int((sub["Status"] == "Dead").sum()),
-                        }
-                    )
-            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-            st.caption(
-                "*Size categories computed per image (OrganoIDNet: https://doi.org/10.1007/s13402-024-00958-2 | Dataset: https://www.nature.com/articles/s41597-024-03631-3)"
-            )
-
-            st.subheader("Morphology distributions")
-            figs = plot_morphology(stats_df)
-            for fig in figs.values():
-                st.pyplot(fig)
+            show_size_distribution(stats_df, "Size distribution")
+            show_morphology(stats_df, "Morphology distributions")
 
             st.subheader("Per-organoid details")
             display = stats_df[
@@ -416,7 +408,7 @@ if submitted:
             img = load_image(f)
             name = f.name
 
-            def on_tile(d, t, name=name, i=i):
+            def on_batch_tile(d, t, name=name, i=i):
                 frac = (i + d / t) / n_files
                 prog.progress(min(frac, 1.0), text=f"{name}  |  tile {d}/{t}")
 
@@ -424,7 +416,7 @@ if submitted:
                 instances = predict_large_image(
                     predict_fn,
                     img,
-                    progress_callback=on_tile,
+                    progress_callback=on_batch_tile,
                 )
             except Exception as e:
                 prog.empty()
@@ -448,13 +440,15 @@ if submitted:
             mean_area = combined["area"].mean()
             mean_ecc = combined["eccentricity"].mean()
 
-            m1, m2, m3, m4, m5, m6 = st.columns(6)
-            m1.metric("Total organoids", total_organoids)
-            m2.metric("Live", n_live)
-            m3.metric("Dead", n_dead)
-            m4.metric("Viability", f"{viability:.1f}%")
-            m5.metric("Mean area", f"{mean_area:.0f} px\u00b2")
-            m6.metric("Mean eccentricity", f"{mean_ecc:.2f}")
+            show_summary_metrics(
+                "Total organoids",
+                total_organoids,
+                n_live,
+                n_dead,
+                viability,
+                mean_area,
+                mean_ecc,
+            )
 
             st.subheader("Per-image summary")
             summary_rows = []
@@ -477,29 +471,8 @@ if submitted:
                 )
             st.dataframe(pd.DataFrame(summary_rows), width="stretch", hide_index=True)
 
-            st.subheader("Size distribution (aggregate)")
-            order = ["Tiny", "Small", "Medium", "Large", "Huge"]
-            sz_rows = []
-            for sz in order:
-                sub = combined[combined["Size"] == sz]
-                if len(sub):
-                    sz_rows.append(
-                        {
-                            "Size": sz,
-                            "Total": len(sub),
-                            "Live": int((sub["Status"] == "Live").sum()),
-                            "Dead": int((sub["Status"] == "Dead").sum()),
-                        }
-                    )
-            st.dataframe(pd.DataFrame(sz_rows), width="stretch", hide_index=True)
-            st.caption(
-                "*Size categories computed per image (OrganoIDNet: https://doi.org/10.1007/s13402-024-00958-2 | Dataset: https://www.nature.com/articles/s41597-024-03631-3)"
-            )
-
-            st.subheader("Morphology distributions (aggregate)")
-            figs = plot_morphology(combined)
-            for fig in figs.values():
-                st.pyplot(fig)
+            show_size_distribution(combined, "Size distribution (aggregate)")
+            show_morphology(combined, "Morphology distributions (aggregate)")
 
             csv = combined.to_csv(index=False).encode()
             st.download_button(
