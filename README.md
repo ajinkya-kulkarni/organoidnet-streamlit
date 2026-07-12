@@ -30,4 +30,3 @@ uv run mypy streamlit_app.py patch_inference.py
 
 - **OrganoIDNet model**: [Kulkarni et al. (2024)](https://link.springer.com/article/10.1007/s13402-024-00958-2)
 - **PDAC organoid dataset**: [Kulkarni et al. (2024)](https://www.nature.com/articles/s41597-024-03631-3)
-- Training code & dataset: https://github.com/ajinkya-kulkarni/PyOrganoIDNet
