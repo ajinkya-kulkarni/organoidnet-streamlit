@@ -35,7 +35,7 @@ OUTLINE_COLORS = {"Live": (0, 255, 0), "Dead": (255, 0, 0)}
 @st.cache_resource
 def load_model():
     model = cellpose_nuclei(
-        n_nuc_classes=2, enc_name="efficientnet_b0", enc_pretrain=False
+        n_nuc_classes=2, enc_name="efficientnet_b3", enc_pretrain=False
     )
     model.load_state_dict(torch.load(CKPT, map_location="cpu")["model"])
     model.to(DEVICE)
