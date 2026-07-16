@@ -24,11 +24,6 @@ DEVICE = "cpu"
 TRANSFORM = A.Compose([MinMaxNormalization(always_apply=True)])
 INTENSITY_THRESHOLD = 50
 SIZE_ORDER = ("Tiny", "Small", "Medium", "Large", "Huge")
-CITATION_CAPTION = (
-    "*Size categories computed per image "
-    "(OrganoIDNet: https://doi.org/10.1007/s13402-024-00958-2 | "
-    "Dataset: https://www.nature.com/articles/s41597-024-03631-3)"
-)
 OUTLINE_COLORS = {"Live": (0, 255, 0), "Dead": (255, 0, 0)}
 
 
@@ -267,7 +262,6 @@ def build_size_summary(df):
 def show_size_distribution(df, title):
     st.subheader(title)
     st.dataframe(build_size_summary(df), width="stretch", hide_index=True)
-    st.caption(CITATION_CAPTION)
 
 
 def show_morphology(df, title):
@@ -278,6 +272,7 @@ def show_morphology(df, title):
 
 st.set_page_config(page_title="OrganoIDNet", layout="wide")
 st.title("OrganoIDNet")
+st.caption("If you use this application, please cite the OrganoIDNet paper: https://doi.org/10.1007/s13402-024-00958-2")
 
 cellseg_model = load_model()
 
