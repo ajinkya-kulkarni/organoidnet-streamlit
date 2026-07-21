@@ -4,10 +4,8 @@ import zipfile
 
 import albumentations as A
 import matplotlib as mpl
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 import streamlit as st
 import torch
 from PIL import Image
@@ -24,7 +22,6 @@ DEVICE = "cpu"
 TRANSFORM = A.Compose([MinMaxNormalization(always_apply=True)])
 OUTLINE_COLORS = {"Live": (0, 255, 0), "Dead": (255, 0, 0)}
 
-
 @st.cache_resource
 def load_model():
     model = cellpose_nuclei(
@@ -34,7 +31,6 @@ def load_model():
     model.to(DEVICE)
     model.eval()
     return model
-
 
 @torch.no_grad()
 def predict(model, img_rgb):
@@ -46,7 +42,6 @@ def predict(model, img_rgb):
     flow = out["nuc"].aux_map[0].cpu().numpy()
     instances = post_proc_cellpose(fg_prob > 0.5, flow, min_size=30)
     return instances
-
 
 def classify_organoids(instances, gray_img, threshold=50):
     live, dead = [], []
@@ -60,7 +55,6 @@ def classify_organoids(instances, gray_img, threshold=50):
             dead.append(inst_id)
     return live, dead
 
-
 def random_label_cmap(n=2**16, h=(0, 1), lightness=(0.4, 1), s=(0.2, 0.8)):
     h_vals = np.random.uniform(*h, n)
     l_vals = np.random.uniform(*lightness, n)
@@ -72,13 +66,10 @@ def random_label_cmap(n=2**16, h=(0, 1), lightness=(0.4, 1), s=(0.2, 0.8)):
     cols[0] = 0
     return mpl.colors.ListedColormap(cols)
 
-
 _LABEL_CMAP = random_label_cmap()
-
 
 def render_instance_mask(inst):
     return (_LABEL_CMAP(inst)[:, :, :3] * 255).astype(np.uint8)
-
 
 def _draw_instance_boxes(overlay, instances, instance_ids, color, thickness=3):
     for inst_id in instance_ids:
@@ -93,7 +84,6 @@ def _draw_instance_boxes(overlay, instances, instance_ids, color, thickness=3):
             overlay[y1+t, x1:x2+1] = color
             overlay[y2-t, x1:x2+1] = color
 
-
 def draw_classified_outlines(img, instances, live_ids, dead_ids):
     overlay = img.copy()
     if len(np.unique(instances)) <= 1:
@@ -102,6 +92,25 @@ def draw_classified_outlines(img, instances, live_ids, dead_ids):
     _draw_instance_boxes(overlay, instances, dead_ids, OUTLINE_COLORS["Dead"])
     return overlay
 
+def _build_summary_row(name, df):
+    t = len(df)
+    if t == 0:
+        return {"Image": name, "Organoids": 0, "Live": 0, "Dead": 0}
+    lv = int((df["Status"] == "Live").sum())
+    dd = int((df["Status"] == "Dead").sum())
+    total_area = df["area"].sum()
+    live_df = df[df["Status"] == "Live"]
+    dead_df = df[df["Status"] == "Dead"]
+    return {
+        "Image": name,
+        "Organoids": t,
+        "Total area (px²)": round(total_area),
+        "Live": lv,
+        "Dead": dd,
+        "Mean live area (px²)": round(live_df["area"].mean()) if len(live_df) > 0 else None,
+        "Mean dead area (px²)": round(dead_df["area"].mean()) if len(dead_df) > 0 else None,
+        "Mean area (px²)": round(df["area"].mean()),
+    }
 
 def compute_stats(instances, img, threshold=50):
     gray = np.mean(img, axis=2)
@@ -116,118 +125,19 @@ def compute_stats(instances, img, threshold=50):
     df["Status"] = np.where(df["mean_intensity"] >= threshold, "Live", "Dead")
     return df
 
-
-plt.rcParams.update(
-    {
-        "font.family": "sans-serif",
-        "font.sans-serif": [
-            "Helvetica Neue",
-            "Arial",
-            "Liberation Sans",
-            "DejaVu Sans",
-            "sans-serif",
-        ],
-        "font.size": 11,
-        "axes.titlesize": 13,
-        "axes.labelsize": 11,
-        "xtick.labelsize": 9,
-        "ytick.labelsize": 9,
-        "legend.fontsize": 9,
-        "figure.dpi": 100,
-        "axes.facecolor": "white",
-        "axes.edgecolor": "black",
-    }
-)
-sns.set_theme(
-    style="ticks",
-    rc={
-        "axes.facecolor": "white",
-        "axes.grid": True,
-        "grid.color": "#e0e0e0",
-        "grid.linestyle": "-",
-        "grid.alpha": 0.5,
-    },
-)
-COLORS = {"Live": "#27ae60", "Dead": "#e74c3c"}
-
-
-def plot_area_distribution(df):
-    figs = {}
-    for status in ("Live", "Dead"):
-        sub = df[df["Status"] == status]
-        n = len(sub)
-        if n == 0:
-            continue
-        fig, ax = plt.subplots(figsize=(6, 3))
-        bins = min(30, max(8, n // 5))
-        sns.histplot(
-            sub["area"],
-            bins=bins,
-            stat="density",
-            alpha=0.3,
-            color=COLORS[status],
-            edgecolor=COLORS[status],
-            linewidth=0.4,
-            ax=ax,
-        )
-        if n >= 2:
-            sns.kdeplot(
-                sub["area"], color=COLORS[status], linewidth=1.8, bw_adjust=0.5, ax=ax
-            )
-            mean_val = sub["area"].mean()
-            ax.axvline(
-                mean_val,
-                color=COLORS[status],
-                linestyle="--",
-                linewidth=1.0,
-                alpha=0.6,
-                label=f"{status} mean",
-            )
-            leg = ax.legend(fontsize=8, framealpha=0.9, edgecolor="#b0b0b0")
-            leg.get_frame().set_linewidth(0.5)
-        ax.set_title(f"{status} organoids — area distribution", fontsize=12, pad=6)
-        ax.set_xlabel("Area (px²)", fontsize=10)
-        ax.set_ylabel("Density", fontsize=10)
-        ax.tick_params(labelsize=8)
-        sns.despine(ax=ax, top=True, right=True)
-        fig.tight_layout()
-        figs[status] = fig
-    return figs
-
-
-def show_summary_metrics(total_organoids, total_area, n_live, n_dead, mean_live_area, mean_dead_area, mean_area):
-    columns = st.columns(7)
-    columns[0].metric("Total organoids", total_organoids)
-    columns[1].metric("Total area", f"{total_area:.0f} px²")
-    columns[2].metric("Live", n_live)
-    columns[3].metric("Dead", n_dead)
-    columns[4].metric("Mean live area", f"{mean_live_area:.0f} px²" if mean_live_area else "—")
-    columns[5].metric("Mean dead area", f"{mean_dead_area:.0f} px²" if mean_dead_area else "—")
-    columns[6].metric("Mean area", f"{mean_area:.0f} px²")
-
-
-def show_morphology(df, title):
-    st.subheader(title)
-    for fig in plot_area_distribution(df).values():
-        st.pyplot(fig)
-
-
 st.set_page_config(page_title="OrganoIDNet", layout="wide")
 st.title("OrganoIDNet")
 st.caption("If you use this application, please cite the OrganoIDNet paper: https://doi.org/10.1007/s13402-024-00958-2")
 
 cellseg_model = load_model()
 
-
 def load_image(f):
     return np.array(Image.open(io.BytesIO(f.read())).convert("RGB"))
-
 
 def _mask_to_bytes(mask, stem="mask"):
     buf = io.BytesIO()
     Image.fromarray(mask, mode="I").save(buf, format="TIFF")
     return buf.getvalue(), f"{stem}.tif"
-
 
 with st.form(key="analyze_form"):
     uploaded_files = st.file_uploader(
@@ -243,10 +153,8 @@ with st.form(key="analyze_form"):
 
     submitted = st.form_submit_button("Analyze", use_container_width=True)
 
-
 def predict_fn(p):
     return predict(cellseg_model, p)
-
 
 if not uploaded_files:
     st.stop()
@@ -298,21 +206,14 @@ if submitted:
                 width="stretch",
             )
 
-        n_live = len(live_ids)
-        n_dead = len(dead_ids)
-        live_df = stats_df[stats_df["Status"] == "Live"] if total > 0 else pd.DataFrame()
-        dead_df = stats_df[stats_df["Status"] == "Dead"] if total > 0 else pd.DataFrame()
-        total_area = stats_df["area"].sum() if total > 0 else 0
-        mean_live_area = live_df["area"].mean() if len(live_df) > 0 else 0
-        mean_dead_area = dead_df["area"].mean() if len(dead_df) > 0 else 0
-        mean_area = stats_df["area"].mean() if total > 0 else 0
-
-        show_summary_metrics(
-            total, total_area, n_live, n_dead, mean_live_area, mean_dead_area, mean_area
-        )
-
         if total > 0:
-            show_morphology(stats_df, "Area distributions")
+            st.subheader("Summary")
+            st.dataframe(
+                pd.DataFrame([_build_summary_row(f.name, stats_df)]),
+                width="stretch",
+                hide_index=True,
+                column_config={"Image": st.column_config.TextColumn("Image")},
+            )
 
             st.subheader("Per-organoid details")
             display = stats_df[
@@ -373,43 +274,14 @@ if submitted:
         else:
             combined = pd.concat(all_dfs, ignore_index=True)
 
-            total_organoids = len(combined)
-            n_live = int((combined["Status"] == "Live").sum())
-            n_dead = int((combined["Status"] == "Dead").sum())
-            live_df = combined[combined["Status"] == "Live"] if n_live > 0 else pd.DataFrame()
-            dead_df = combined[combined["Status"] == "Dead"] if n_dead > 0 else pd.DataFrame()
-            total_area = combined["area"].sum()
-            mean_live_area = live_df["area"].mean() if len(live_df) > 0 else 0
-            mean_dead_area = dead_df["area"].mean() if len(dead_df) > 0 else 0
-            mean_area = combined["area"].mean()
-
-            show_summary_metrics(
-                total_organoids,
-                total_area,
-                n_live,
-                n_dead,
-                mean_live_area,
-                mean_dead_area,
-                mean_area,
-            )
-
             st.subheader("Per-image summary")
-            summary_rows = []
-            for name, _, df in results:
-                t = len(df)
-                lv = int((df["Status"] == "Live").sum()) if t > 0 else 0
-                dd = int((df["Status"] == "Dead").sum()) if t > 0 else 0
-                summary_rows.append(
-                    {
-                        "Image": name,
-                        "Organoids": t,
-                        "Live": lv,
-                        "Dead": dd,
-                    }
-                )
-            st.dataframe(pd.DataFrame(summary_rows), width="stretch", hide_index=True)
-
-            show_morphology(combined, "Area distributions (aggregate)")
+            summary_rows = [_build_summary_row(name, df) for name, _, df in results]
+            st.dataframe(
+                pd.DataFrame(summary_rows),
+                width="stretch",
+                hide_index=True,
+                column_config={"Image": st.column_config.TextColumn("Image")},
+            )
 
             csv = combined.to_csv(index=False).encode()
             st.download_button(
