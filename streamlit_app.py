@@ -208,11 +208,21 @@ if submitted:
 
         if total > 0:
             st.subheader("Summary")
+            _cfg = {
+                "Image": st.column_config.TextColumn("Image", alignment="center"),
+                "Organoids": st.column_config.NumberColumn("Organoids", alignment="center"),
+                "Total area (px²)": st.column_config.NumberColumn("Total area (px²)", alignment="center"),
+                "Live": st.column_config.NumberColumn("Live", alignment="center"),
+                "Dead": st.column_config.NumberColumn("Dead", alignment="center"),
+                "Mean live area (px²)": st.column_config.NumberColumn("Mean live area (px²)", alignment="center"),
+                "Mean dead area (px²)": st.column_config.NumberColumn("Mean dead area (px²)", alignment="center"),
+                "Mean area (px²)": st.column_config.NumberColumn("Mean area (px²)", alignment="center"),
+            }
             st.dataframe(
                 pd.DataFrame([_build_summary_row(f.name, stats_df)]),
                 width="stretch",
                 hide_index=True,
-                column_config={"Image": st.column_config.TextColumn("Image")},
+                column_config=_cfg,
             )
 
             st.subheader("Per-organoid details")
@@ -267,7 +277,12 @@ if submitted:
             results.append((f.name, instances, stats_df))
         prog.empty()
 
-        all_dfs = [df for _, _, df in results if len(df) > 0]
+        all_dfs = []
+        for name, _, df in results:
+            if len(df) > 0:
+                df = df.copy()
+                df.insert(0, "Image", name)
+                all_dfs.append(df)
 
         if not all_dfs:
             st.warning("No organoids detected in any of the uploaded images.")
@@ -275,12 +290,22 @@ if submitted:
             combined = pd.concat(all_dfs, ignore_index=True)
 
             st.subheader("Per-image summary")
+            _cfg = {
+                "Image": st.column_config.TextColumn("Image", alignment="center"),
+                "Organoids": st.column_config.NumberColumn("Organoids", alignment="center"),
+                "Total area (px²)": st.column_config.NumberColumn("Total area (px²)", alignment="center"),
+                "Live": st.column_config.NumberColumn("Live", alignment="center"),
+                "Dead": st.column_config.NumberColumn("Dead", alignment="center"),
+                "Mean live area (px²)": st.column_config.NumberColumn("Mean live area (px²)", alignment="center"),
+                "Mean dead area (px²)": st.column_config.NumberColumn("Mean dead area (px²)", alignment="center"),
+                "Mean area (px²)": st.column_config.NumberColumn("Mean area (px²)", alignment="center"),
+            }
             summary_rows = [_build_summary_row(name, df) for name, _, df in results]
             st.dataframe(
                 pd.DataFrame(summary_rows),
                 width="stretch",
                 hide_index=True,
-                column_config={"Image": st.column_config.TextColumn("Image")},
+                column_config=_cfg,
             )
 
             csv = combined.to_csv(index=False).encode()
