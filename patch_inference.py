@@ -4,7 +4,6 @@ from typing import Any, TypedDict
 import numpy as np
 import numpy.typing as npt
 from skimage import measure
-from skimage.morphology import remove_small_objects
 
 
 PATCH_SIZE = 256
@@ -167,6 +166,8 @@ def predict_large_image(
                 next_id += 1
 
     if max_size > 0:
-        remove_small_objects(canvas, max_size=max_size, out=canvas)
+        for prop in measure.regionprops(canvas):
+            if prop.area <= max_size:
+                canvas[canvas == prop.label] = 0
 
     return canvas
