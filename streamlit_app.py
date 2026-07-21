@@ -1,9 +1,7 @@
-import colorsys
 import io
 import zipfile
 
 import albumentations as A
-import matplotlib as mpl
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -55,23 +53,13 @@ def classify_organoids(instances, gray_img, threshold=50):
             dead.append(inst_id)
     return live, dead
 
-def random_label_cmap(n=2**16, h=(0, 1), lightness=(0.4, 1), s=(0.2, 0.8)):
-    h_vals = np.random.uniform(*h, n)
-    l_vals = np.random.uniform(*lightness, n)
-    s_vals = np.random.uniform(*s, n)
-    cols = np.stack(
-        [colorsys.hls_to_rgb(_h, _l, _s) for _h, _l, _s in zip(h_vals, l_vals, s_vals)],
-        axis=0,
-    )
-    cols[0] = 0
-    return mpl.colors.ListedColormap(cols)
+def render_image_with_mask(img, instances):
+    out = img.astype(np.float32)
+    mask_bg = instances == 0
+    out[mask_bg] = np.nan
+    return out
 
-_LABEL_CMAP = random_label_cmap()
-
-def render_instance_mask(inst):
-    return (_LABEL_CMAP(inst)[:, :, :3] * 255).astype(np.uint8)
-
-def _draw_instance_boxes(overlay, instances, instance_ids, color, thickness=3):
+def _draw_instance_boxes(overlay, instances, instance_ids, color, thickness=2):
     for inst_id in instance_ids:
         ys, xs = np.where(instances == inst_id)
         if len(ys) == 0:
@@ -151,7 +139,7 @@ with st.form(key="analyze_form"):
 
     intensity_threshold = st.number_input(
         "Intensity threshold for live/dead classification (0 = all live, 255 = all dead)",
-        min_value=0, max_value=255, value=50, step=1,
+        min_value=0, max_value=255, value=50, step=5,
     )
 
     submitted = st.form_submit_button("Analyze", use_container_width=True)
@@ -268,8 +256,8 @@ if st.session_state.results is not None:
             st.image(r["img"], caption="Input", width="stretch")
         with col2:
             st.image(
-                render_instance_mask(r["instances"]),
-                caption="Instance mask",
+                render_image_with_mask(r["img"], r["instances"]),
+                caption="Overlay mask",
                 width="stretch",
             )
         with col3:
