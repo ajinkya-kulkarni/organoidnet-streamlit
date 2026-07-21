@@ -22,8 +22,6 @@ from skimage.measure import regionprops_table
 CKPT = "models/best.pt"
 DEVICE = "cpu"
 TRANSFORM = A.Compose([MinMaxNormalization(always_apply=True)])
-INTENSITY_THRESHOLD = 50
-SIZE_ORDER = ("Tiny", "Small", "Medium", "Large", "Huge")
 OUTLINE_COLORS = {"Live": (0, 255, 0), "Dead": (255, 0, 0)}
 
 
@@ -82,17 +80,18 @@ def render_instance_mask(inst):
     return (_LABEL_CMAP(inst)[:, :, :3] * 255).astype(np.uint8)
 
 
-def _draw_instance_boxes(overlay, instances, instance_ids, color):
+def _draw_instance_boxes(overlay, instances, instance_ids, color, thickness=3):
     for inst_id in instance_ids:
         ys, xs = np.where(instances == inst_id)
         if len(ys) == 0:
             continue
         y1, y2 = int(ys.min()), int(ys.max())
         x1, x2 = int(xs.min()), int(xs.max())
-        overlay[y1 : y2 + 1, x1] = color
-        overlay[y1 : y2 + 1, x2] = color
-        overlay[y1, x1 : x2 + 1] = color
-        overlay[y2, x1 : x2 + 1] = color
+        for t in range(thickness):
+            overlay[y1:y2+1, x1+t] = color
+            overlay[y1:y2+1, x2-t] = color
+            overlay[y1+t, x1:x2+1] = color
+            overlay[y2-t, x1:x2+1] = color
 
 
 def draw_classified_outlines(img, instances, live_ids, dead_ids):
@@ -104,37 +103,17 @@ def draw_classified_outlines(img, instances, live_ids, dead_ids):
     return overlay
 
 
-def compute_stats(instances, img):
+def compute_stats(instances, img, threshold=50):
     gray = np.mean(img, axis=2)
     props = regionprops_table(
         instances,
         intensity_image=gray,
-        properties=("label", "area", "perimeter", "eccentricity", "mean_intensity"),
+        properties=("label", "area", "mean_intensity"),
     )
     df = pd.DataFrame(props)
     if len(df) == 0:
         return df
-    df["jaggedness"] = df["perimeter"] / df["area"]
-    df["compactness"] = df["area"] / df["perimeter"]
-    df["Status"] = np.where(df["mean_intensity"] >= INTENSITY_THRESHOLD, "Live", "Dead")
-    areas = np.asarray(df["area"], dtype=float)
-    if len(areas) > 1:
-        p20, p40, p60, p80 = np.percentile(areas, [20, 40, 60, 80])
-    else:
-        p20 = p40 = p60 = p80 = areas[0]
-
-    def size_cat(a):
-        if a <= p20:
-            return SIZE_ORDER[0]
-        if a <= p40:
-            return SIZE_ORDER[1]
-        if a <= p60:
-            return SIZE_ORDER[2]
-        if a <= p80:
-            return SIZE_ORDER[3]
-        return SIZE_ORDER[4]
-
-    df["Size"] = df["area"].apply(size_cat)
+    df["Status"] = np.where(df["mean_intensity"] >= threshold, "Live", "Dead")
     return df
 
 
@@ -172,101 +151,64 @@ sns.set_theme(
 COLORS = {"Live": "#27ae60", "Dead": "#e74c3c"}
 
 
-def plot_morphology(df):
-    cols = ["area", "eccentricity", "jaggedness", "compactness"]
-    titles = {
-        "area": "Area",
-        "eccentricity": "Eccentricity",
-        "jaggedness": "Jaggedness",
-        "compactness": "Compactness",
-    }
-    xlabels = {
-        "area": "Area (px\u00b2)",
-        "eccentricity": "Eccentricity (a.u.)",
-        "jaggedness": "Jaggedness (px\u207b\u00b9)",
-        "compactness": "Compactness (px)",
-    }
-
+def plot_area_distribution(df):
     figs = {}
     for status in ("Live", "Dead"):
         sub = df[df["Status"] == status]
         n = len(sub)
         if n == 0:
             continue
-        fig, axes = plt.subplots(1, 4, figsize=(12, 2.8))
-        for ax, col in zip(axes, cols):
-            bins = min(30, max(8, n // 5))
-            sns.histplot(
-                sub[col],
-                bins=bins,
-                stat="density",
-                alpha=0.3,
-                color=COLORS[status],
-                edgecolor=COLORS[status],
-                linewidth=0.4,
-                ax=ax,
+        fig, ax = plt.subplots(figsize=(6, 3))
+        bins = min(30, max(8, n // 5))
+        sns.histplot(
+            sub["area"],
+            bins=bins,
+            stat="density",
+            alpha=0.3,
+            color=COLORS[status],
+            edgecolor=COLORS[status],
+            linewidth=0.4,
+            ax=ax,
+        )
+        if n >= 2:
+            sns.kdeplot(
+                sub["area"], color=COLORS[status], linewidth=1.8, bw_adjust=0.5, ax=ax
             )
-            if n >= 2:
-                sns.kdeplot(
-                    sub[col], color=COLORS[status], linewidth=1.8, bw_adjust=0.5, ax=ax
-                )
-                mean_val = sub[col].mean()
-                ax.axvline(
-                    mean_val,
-                    color=COLORS[status],
-                    linestyle="--",
-                    linewidth=1.0,
-                    alpha=0.6,
-                    label=f"{status} mean",
-                )
-                leg = ax.legend(fontsize=8, framealpha=0.9, edgecolor="#b0b0b0")
-                leg.get_frame().set_linewidth(0.5)
-            ax.set_title(titles[col], fontsize=12, pad=6)
-            ax.set_xlabel(xlabels[col], fontsize=10)
-            ax.set_ylabel("Density", fontsize=10)
-            ax.tick_params(labelsize=8)
-            sns.despine(ax=ax, top=True, right=True)
-        fig.suptitle(f"{status} organoids", fontsize=14, y=1.02)
+            mean_val = sub["area"].mean()
+            ax.axvline(
+                mean_val,
+                color=COLORS[status],
+                linestyle="--",
+                linewidth=1.0,
+                alpha=0.6,
+                label=f"{status} mean",
+            )
+            leg = ax.legend(fontsize=8, framealpha=0.9, edgecolor="#b0b0b0")
+            leg.get_frame().set_linewidth(0.5)
+        ax.set_title(f"{status} organoids — area distribution", fontsize=12, pad=6)
+        ax.set_xlabel("Area (px²)", fontsize=10)
+        ax.set_ylabel("Density", fontsize=10)
+        ax.tick_params(labelsize=8)
+        sns.despine(ax=ax, top=True, right=True)
+        fig.tight_layout()
         figs[status] = fig
     return figs
 
 
-def show_summary_metrics(
-    total_label, total, n_live, n_dead, viability, mean_area, mean_ecc
-):
-    columns = st.columns(6)
-    columns[0].metric(total_label, total)
-    columns[1].metric("Live", n_live)
-    columns[2].metric("Dead", n_dead)
-    columns[3].metric("Viability", f"{viability:.1f}%")
-    columns[4].metric("Mean area", f"{mean_area:.0f} px\u00b2")
-    columns[5].metric("Mean eccentricity", f"{mean_ecc:.2f}")
-
-
-def build_size_summary(df):
-    rows = []
-    for size in SIZE_ORDER:
-        sub = df[df["Size"] == size]
-        if len(sub):
-            rows.append(
-                {
-                    "Size": size,
-                    "Total": len(sub),
-                    "Live": int((sub["Status"] == "Live").sum()),
-                    "Dead": int((sub["Status"] == "Dead").sum()),
-                }
-            )
-    return pd.DataFrame(rows)
-
-
-def show_size_distribution(df, title):
-    st.subheader(title)
-    st.dataframe(build_size_summary(df), width="stretch", hide_index=True)
+def show_summary_metrics(total_organoids, total_area, n_live, n_dead, mean_live_area, mean_dead_area, mean_area):
+    columns = st.columns(7)
+    columns[0].metric("Total organoids", total_organoids)
+    columns[1].metric("Total area", f"{total_area:.0f} px²")
+    columns[2].metric("Live", n_live)
+    columns[3].metric("Dead", n_dead)
+    columns[4].metric("Mean live area", f"{mean_live_area:.0f} px²" if mean_live_area else "—")
+    columns[5].metric("Mean dead area", f"{mean_dead_area:.0f} px²" if mean_dead_area else "—")
+    columns[6].metric("Mean area", f"{mean_area:.0f} px²")
 
 
 def show_morphology(df, title):
     st.subheader(title)
-    for fig in plot_morphology(df).values():
+    for fig in plot_area_distribution(df).values():
         st.pyplot(fig)
 
 
@@ -292,6 +234,11 @@ with st.form(key="analyze_form"):
         "Upload organoid images (256\u00d7256 patches or larger, up to 2000px per side; up to 20)",
         type=["png", "jpg", "jpeg", "tif", "tiff"],
         accept_multiple_files=True,
+    )
+
+    intensity_threshold = st.slider(
+        "Intensity threshold for live/dead classification (0 = all live, 255 = all dead)",
+        min_value=0, max_value=255, value=50,
     )
 
     submitted = st.form_submit_button("Analyze", use_container_width=True)
@@ -331,8 +278,8 @@ if submitted:
             st.stop()
         prog.empty()
         gray = np.mean(img, axis=2)
-        live_ids, dead_ids = classify_organoids(instances, gray, INTENSITY_THRESHOLD)
-        stats_df = compute_stats(instances, img)
+        live_ids, dead_ids = classify_organoids(instances, gray, intensity_threshold)
+        stats_df = compute_stats(instances, img, intensity_threshold)
         total = len(stats_df)
 
         col1, col2, col3 = st.columns(3)
@@ -353,35 +300,33 @@ if submitted:
 
         n_live = len(live_ids)
         n_dead = len(dead_ids)
-        viability = n_live / total * 100 if total > 0 else 0
+        live_df = stats_df[stats_df["Status"] == "Live"] if total > 0 else pd.DataFrame()
+        dead_df = stats_df[stats_df["Status"] == "Dead"] if total > 0 else pd.DataFrame()
+        total_area = stats_df["area"].sum() if total > 0 else 0
+        mean_live_area = live_df["area"].mean() if len(live_df) > 0 else 0
+        mean_dead_area = dead_df["area"].mean() if len(dead_df) > 0 else 0
         mean_area = stats_df["area"].mean() if total > 0 else 0
-        mean_ecc = stats_df["eccentricity"].mean() if total > 0 else 0
 
         show_summary_metrics(
-            "Total", total, n_live, n_dead, viability, mean_area, mean_ecc
+            total, total_area, n_live, n_dead, mean_live_area, mean_dead_area, mean_area
         )
 
         if total > 0:
-            show_size_distribution(stats_df, "Size distribution")
-            show_morphology(stats_df, "Morphology distributions")
+            show_morphology(stats_df, "Area distributions")
 
             st.subheader("Per-organoid details")
             display = stats_df[
                 [
                     "label",
                     "area",
-                    "eccentricity",
                     "mean_intensity",
-                    "Size",
                     "Status",
                 ]
             ]
             display.columns = [
                 "ID",
-                "Area (px\u00b2)",
-                "Eccentricity",
+                "Area (px²)",
                 "Mean intensity",
-                "Size",
                 "Status",
             ]
             st.dataframe(display, width="stretch", hide_index=True)
@@ -417,7 +362,7 @@ if submitted:
                 prog.empty()
                 st.error(f"Inference failed for {name}: {e}")
                 st.stop()
-            stats_df = compute_stats(instances, img)
+            stats_df = compute_stats(instances, img, intensity_threshold)
             results.append((f.name, instances, stats_df))
         prog.empty()
 
@@ -431,18 +376,21 @@ if submitted:
             total_organoids = len(combined)
             n_live = int((combined["Status"] == "Live").sum())
             n_dead = int((combined["Status"] == "Dead").sum())
-            viability = n_live / total_organoids * 100
+            live_df = combined[combined["Status"] == "Live"] if n_live > 0 else pd.DataFrame()
+            dead_df = combined[combined["Status"] == "Dead"] if n_dead > 0 else pd.DataFrame()
+            total_area = combined["area"].sum()
+            mean_live_area = live_df["area"].mean() if len(live_df) > 0 else 0
+            mean_dead_area = dead_df["area"].mean() if len(dead_df) > 0 else 0
             mean_area = combined["area"].mean()
-            mean_ecc = combined["eccentricity"].mean()
 
             show_summary_metrics(
-                "Total organoids",
                 total_organoids,
+                total_area,
                 n_live,
                 n_dead,
-                viability,
+                mean_live_area,
+                mean_dead_area,
                 mean_area,
-                mean_ecc,
             )
 
             st.subheader("Per-image summary")
@@ -451,23 +399,17 @@ if submitted:
                 t = len(df)
                 lv = int((df["Status"] == "Live").sum()) if t > 0 else 0
                 dd = int((df["Status"] == "Dead").sum()) if t > 0 else 0
-                if t > 0:
-                    v = f"{lv / t * 100:.1f}%"
-                else:
-                    v = "\u2014"
                 summary_rows.append(
                     {
                         "Image": name,
                         "Organoids": t,
                         "Live": lv,
                         "Dead": dd,
-                        "Viability": v,
                     }
                 )
             st.dataframe(pd.DataFrame(summary_rows), width="stretch", hide_index=True)
 
-            show_size_distribution(combined, "Size distribution (aggregate)")
-            show_morphology(combined, "Morphology distributions (aggregate)")
+            show_morphology(combined, "Area distributions (aggregate)")
 
             csv = combined.to_csv(index=False).encode()
             st.download_button(
