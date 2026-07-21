@@ -40,7 +40,7 @@ def predict(model, img_rgb):
     type_prob = torch.softmax(out["nuc"].type_map, dim=1)
     fg_prob = type_prob[0, 1].cpu().numpy()
     flow = out["nuc"].aux_map[0].cpu().numpy()
-    instances = post_proc_cellpose(fg_prob > 0.5, flow, min_size=30)
+    instances = post_proc_cellpose(fg_prob > 0.5, flow, min_size=0)
     return instances
 
 def classify_organoids(instances, gray_img, threshold=50):

@@ -4,11 +4,13 @@ from typing import Any, TypedDict
 import numpy as np
 import numpy.typing as npt
 from skimage import measure
+from skimage.morphology import remove_small_objects
 
 
 PATCH_SIZE = 256
 OVERLAP = 64
 MAX_DIM = 2000
+MAX_SIZE = 10
 
 Array = npt.NDArray[Any]
 BoolMask = npt.NDArray[np.bool_]
@@ -100,6 +102,7 @@ def predict_large_image(
     overlap: int = OVERLAP,
     iou_thresh: float = 0.5,
     max_dim: int = MAX_DIM,
+    max_size: int = MAX_SIZE,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> IntMask:
     if patch_size <= 0:
@@ -162,5 +165,8 @@ def predict_large_image(
             if write_mask.any():
                 canvas_view[write_mask] = next_id
                 next_id += 1
+
+    if max_size > 0:
+        remove_small_objects(canvas, max_size=max_size, out=canvas)
 
     return canvas
